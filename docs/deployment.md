@@ -1,12 +1,17 @@
-# GLIMCONNECT Deployment
+# CampusConnect Deployment
 
 ## GitHub
 
-1. Create an empty GitHub repository.
-2. Add it as the local remote:
+1. Use the GitHub repository:
+
+```text
+https://github.com/aaryawebdev/campusconnect
+```
+
+2. If this repo needs to be reconnected locally, set it as the `origin` remote:
 
 ```bash
-git remote add origin <github-repo-url>
+git remote set-url origin https://github.com/aaryawebdev/campusconnect.git
 git branch -M main
 git push -u origin main
 ```
@@ -21,7 +26,7 @@ git push -u origin main
 3. Add environment variables:
 
 ```text
-VITE_SUPABASE_URL=https://ndwnbvclefqjkkljtozf.supabase.co
+VITE_SUPABASE_URL=https://wtnwezeuhpuvxwhjmwtg.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=<your Supabase publishable key>
 ```
 
