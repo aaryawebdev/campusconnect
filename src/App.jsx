@@ -1733,7 +1733,7 @@ export default function App() {
       setIsDirectoryLoading(true);
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, full_name, program, major_specialisation, minor_specialisation, can_help_with, profile_photo_url")
+        .select("id, full_name, program, major_specialisation, minor_specialisation, can_help_with, profile_photo_url, linkedin_url")
         .eq("show_in_directory", true)
         .eq("is_private", false);
 
@@ -1803,7 +1803,7 @@ export default function App() {
     setView("directory");
     supabase
       .from("profiles")
-      .select("id, full_name, program, major_specialisation, minor_specialisation, can_help_with, profile_photo_url")
+      .select("id, full_name, program, major_specialisation, minor_specialisation, can_help_with, profile_photo_url, linkedin_url")
       .eq("show_in_directory", true)
       .eq("is_private", false)
       .then(({ data }) => setDirectoryProfiles(data || []));
