@@ -6,6 +6,8 @@ create table if not exists public.profiles (
   linkedin_url text,
   contact_number text,
   program text check (program in ('PGDM 27', 'PGDM 28', 'PGCM 27') or program is null),
+  major_specialisation text,
+  minor_specialisation text,
   can_help_with text[] default '{}',
 
   profile_photo_url text,
@@ -26,7 +28,14 @@ create table if not exists public.profiles (
   updated_at timestamptz default now()
 );
 
+alter table public.profiles
+add column if not exists major_specialisation text,
+add column if not exists minor_specialisation text;
+
 alter table public.profiles enable row level security;
+
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.profiles to authenticated;
 
 drop policy if exists "Great Lakes users can view directory profiles" on public.profiles;
 drop policy if exists "Great Lakes users can view own profile" on public.profiles;
@@ -94,9 +103,12 @@ before update on public.profiles
 for each row
 execute function public.set_updated_at();
 
-insert into storage.buckets (id, name, public)
-values ('profile-photos', 'profile-photos', true)
-on conflict (id) do nothing;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('profile-photos', 'profile-photos', true, 1048576, array['image/jpeg', 'image/png'])
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
 
 drop policy if exists "Great Lakes users can upload own profile photos" on storage.objects;
 drop policy if exists "Great Lakes users can update own profile photos" on storage.objects;
