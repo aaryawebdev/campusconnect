@@ -104,7 +104,7 @@ for each row
 execute function public.set_updated_at();
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('profile-photos', 'profile-photos', true, 1048576, array['image/jpeg', 'image/png'])
+values ('profile-photos', 'profile-photos', true, 1048576, array['image/jpeg', 'image/png', 'image/webp'])
 on conflict (id) do update
 set public = excluded.public,
     file_size_limit = excluded.file_size_limit,

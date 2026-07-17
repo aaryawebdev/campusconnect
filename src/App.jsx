@@ -4,7 +4,103 @@ import { supabase } from "./supabaseClient";
 const GREAT_LAKES_DOMAIN = "greatlakes.edu.in";
 const USE_TEMP_PROFILE_EDITOR = false;
 const PROFILE_PHOTO_MAX_BYTES = 1 * 1024 * 1024;
-const PROFILE_PHOTO_ALLOWED_TYPES = ["image/jpeg", "image/png"];
+const PROFILE_PHOTO_SOURCE_MAX_BYTES = 10 * 1024 * 1024;
+const PROFILE_PHOTO_MAX_DIMENSION = 1200;
+const PROFILE_PHOTO_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const PROFILE_PHOTO_OUTPUT_TYPE = "image/webp";
+const PROFILE_PHOTO_OUTPUT_NAME = "profile.webp";
+const DEFAULT_PHOTO_ADJUSTMENTS = { zoom: 1, rotation: 0, offsetX: 0, offsetY: 0 };
+
+function clampPhotoOffset(value, zoom) {
+  const maxOffset = Math.max(0, (zoom - 1) / 2);
+  return Math.min(maxOffset, Math.max(-maxOffset, value));
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+      } else {
+        reject(new Error("Unable to compress profile photo."));
+      }
+    }, type, quality);
+  });
+}
+
+function loadImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Unable to read profile photo."));
+    };
+
+    image.src = objectUrl;
+  });
+}
+
+async function compressProfilePhoto(file, adjustments = DEFAULT_PHOTO_ADJUSTMENTS) {
+  const image = await loadImageFile(file);
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+
+  if (!sourceWidth || !sourceHeight) {
+    throw new Error("Unable to read profile photo dimensions.");
+  }
+
+  let maxDimension = Math.min(PROFILE_PHOTO_MAX_DIMENSION, Math.max(sourceWidth, sourceHeight));
+  const qualitySteps = [0.86, 0.78, 0.7, 0.62, 0.54, 0.46, 0.38, 0.3];
+  const zoom = Math.min(3, Math.max(1, Number(adjustments.zoom) || 1));
+  const rotation = ((Number(adjustments.rotation) || 0) * Math.PI) / 180;
+  const rotatedBounds = Math.abs(Math.cos(rotation)) + Math.abs(Math.sin(rotation));
+  const offsetX = clampPhotoOffset(Number(adjustments.offsetX) || 0, zoom);
+  const offsetY = clampPhotoOffset(Number(adjustments.offsetY) || 0, zoom);
+
+  while (maxDimension >= 360) {
+    const canvas = document.createElement("canvas");
+    const outputSize = Math.max(1, Math.round(maxDimension));
+    canvas.width = outputSize;
+    canvas.height = outputSize;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Unable to compress profile photo in this browser.");
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, outputSize, outputSize);
+    context.translate((outputSize / 2) + (offsetX * outputSize), (outputSize / 2) + (offsetY * outputSize));
+    context.rotate(rotation);
+
+    const coverScale = (outputSize * rotatedBounds * zoom) / Math.min(sourceWidth, sourceHeight);
+    const drawWidth = sourceWidth * coverScale;
+    const drawHeight = sourceHeight * coverScale;
+    context.drawImage(image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+
+    for (const quality of qualitySteps) {
+      const blob = await canvasToBlob(canvas, PROFILE_PHOTO_OUTPUT_TYPE, quality);
+      if (blob.type !== PROFILE_PHOTO_OUTPUT_TYPE) {
+        throw new Error("This browser could not create a WebP profile photo.");
+      }
+
+      if (blob.size <= PROFILE_PHOTO_MAX_BYTES) {
+        return new File([blob], PROFILE_PHOTO_OUTPUT_NAME, { type: PROFILE_PHOTO_OUTPUT_TYPE });
+      }
+    }
+
+    maxDimension = Math.floor(maxDimension * 0.8);
+  }
+
+  throw new Error("Profile photo could not be compressed below 1MB. Try a smaller image.");
+}
 const TEMP_PROFILE_USER = {
   id: "00000000-0000-4000-8000-000000000001",
   email: `preview@${GREAT_LAKES_DOMAIN}`,
@@ -123,6 +219,25 @@ const sections = [
 const helpOptions = ["Case Competitions", "Interview Prep", "GDPI Prep"];
 const programOptions = ["PGDM 27", "PGDM 28", "PGCM 27"];
 const specialisationOptions = ["Marketing", "Finance", "Operations", "Analytics", "HR", "Strategy"];
+const directoryProfileSelect = [
+  "id",
+  "full_name",
+  "program",
+  "major_specialisation",
+  "minor_specialisation",
+  "can_help_with",
+  "profile_photo_url",
+  "linkedin_url",
+  "education",
+  "work_experience",
+  "internships",
+  "clubs",
+  "certifications",
+  "projects",
+  "publications",
+  "case_competitions",
+  "achievements"
+].join(", ");
 const sampleProfile = {
   id: "sample-aarya-vashisth",
   full_name: "Aarya Vashisth",
@@ -309,6 +424,46 @@ function isGreatLakesEmail(email) {
   return email?.toLowerCase().endsWith(`@${GREAT_LAKES_DOMAIN}`);
 }
 
+function collectSearchText(value) {
+  if (Array.isArray(value)) {
+    return value.map(collectSearchText).join(" ");
+  }
+
+  if (value && typeof value === "object") {
+    return Object.values(value).map(collectSearchText).join(" ");
+  }
+
+  return value == null ? "" : String(value);
+}
+
+function profileMatchesFilters(profile, filters) {
+  const searchValue = filters.search.trim().toLowerCase();
+  const profileSearchText = collectSearchText(profile).toLowerCase();
+  const canHelpWith = Array.isArray(profile.can_help_with) ? profile.can_help_with : [];
+
+  if (searchValue && !profileSearchText.includes(searchValue)) {
+    return false;
+  }
+
+  if (filters.batch && profile.program !== filters.batch) {
+    return false;
+  }
+
+  if (
+    filters.specialisation
+    && profile.major_specialisation !== filters.specialisation
+    && profile.minor_specialisation !== filters.specialisation
+  ) {
+    return false;
+  }
+
+  if (filters.canHelpWith && !canHelpWith.includes(filters.canHelpWith)) {
+    return false;
+  }
+
+  return true;
+}
+
 function updateBrowserHistory(nextView, { replace = false } = {}) {
   const hash = nextView === "directory" ? "" : `#${nextView}`;
   const nextUrl = `${window.location.pathname}${window.location.search}${hash}`;
@@ -437,7 +592,15 @@ function LinkedinIcon({ className = "linkedin-glyph" }) {
   );
 }
 
-function DirectoryHeader({ user, onLogin, onLogout, onNavigate, showFilters = true }) {
+function DirectoryHeader({
+  user,
+  onLogin,
+  onLogout,
+  onNavigate,
+  showFilters = true,
+  filters,
+  onFiltersChange
+}) {
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const accountRef = useRef(null);
 
@@ -477,27 +640,47 @@ function DirectoryHeader({ user, onLogin, onLogout, onNavigate, showFilters = tr
         <div className="filters" aria-label="Directory filters">
           <label className="field field-search">
             <span className="sr-only">Search</span>
-            <input type="search" placeholder="Search by name, company, role, or domain" />
+            <input
+              type="search"
+              placeholder="Search by name, company, role, or domain"
+              value={filters.search}
+              onChange={(event) => onFiltersChange("search", event.target.value)}
+            />
           </label>
 
           <label className="field field-small">
             <span className="sr-only">Batch</span>
-            <select defaultValue="Batch">
-              <option>Batch</option>
+            <select value={filters.batch} onChange={(event) => onFiltersChange("batch", event.target.value)}>
+              <option value="">Batch</option>
+              {programOptions.map((program) => (
+                <option key={program} value={program}>{program}</option>
+              ))}
             </select>
           </label>
 
           <label className="field field-small">
             <span className="sr-only">Specialisation</span>
-            <select defaultValue="Specialisation">
-              <option>Specialisation</option>
+            <select
+              value={filters.specialisation}
+              onChange={(event) => onFiltersChange("specialisation", event.target.value)}
+            >
+              <option value="">Specialisation</option>
+              {specialisationOptions.map((specialisation) => (
+                <option key={specialisation} value={specialisation}>{specialisation}</option>
+              ))}
             </select>
           </label>
 
           <label className="field field-help">
             <span className="sr-only">Can Help With</span>
-            <select defaultValue="Can Help With">
-              <option>Can Help With</option>
+            <select
+              value={filters.canHelpWith}
+              onChange={(event) => onFiltersChange("canHelpWith", event.target.value)}
+            >
+              <option value="">Can Help With</option>
+              {helpOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
             </select>
           </label>
         </div>
@@ -607,7 +790,7 @@ function MiniProfileCard({ profile, onOpen }) {
   );
 }
 
-function DirectoryScreen({ user, directoryProfiles, isLoading, onOpenProfile }) {
+function DirectoryScreen({ user, directoryProfiles, isLoading, hasActiveFilters, onOpenProfile }) {
   return (
     <main className="directory-canvas" aria-label="Directory">
       {!user ? (
@@ -620,7 +803,7 @@ function DirectoryScreen({ user, directoryProfiles, isLoading, onOpenProfile }) 
         </section>
       ) : directoryProfiles.length === 0 ? (
         <section className="empty-directory" aria-label="Directory state">
-          <p>No profiles have been added yet.</p>
+          <p>{hasActiveFilters ? "No profiles match your filters." : "No profiles have been added yet."}</p>
         </section>
       ) : (
         <section className="mini-card-grid" aria-label="Student profile cards">
@@ -769,7 +952,7 @@ function DetailedProfileView({ profile, profiles, onSelectProfile, onClose }) {
                   target="_blank"
                   rel="noreferrer"
                 >
-                  in
+                  <LinkedinIcon className="detail-linkedin-glyph" />
                 </a>
               ) : null}
             </div>
@@ -1273,32 +1456,160 @@ function HelpMultiSelect({ value, onChange }) {
   );
 }
 
-function UploadPhotoBox({ fileName, photoUrl, onFileChange }) {
+function UploadPhotoBox({ fileName, photoUrl, onFileChange, adjustments, onAdjustmentsChange, canAdjust }) {
   const inputRef = useRef(null);
+  const dragStateRef = useRef(null);
+  const suppressClickRef = useRef(false);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
+  const zoom = adjustments?.zoom || DEFAULT_PHOTO_ADJUSTMENTS.zoom;
+  const rotation = adjustments?.rotation || DEFAULT_PHOTO_ADJUSTMENTS.rotation;
+  const offsetX = adjustments?.offsetX || DEFAULT_PHOTO_ADJUSTMENTS.offsetX;
+  const offsetY = adjustments?.offsetY || DEFAULT_PHOTO_ADJUSTMENTS.offsetY;
+  const previewStyle = canAdjust
+    ? { transform: `translate(${offsetX * 100}%, ${offsetY * 100}%) rotate(${rotation}deg) scale(${zoom})` }
+    : undefined;
+
+  function updateAdjustments(nextValues) {
+    const nextZoom = nextValues.zoom ?? zoom;
+    const nextRotation = nextValues.rotation ?? rotation;
+    const nextOffsetX = nextValues.offsetX ?? offsetX;
+    const nextOffsetY = nextValues.offsetY ?? offsetY;
+
+    onAdjustmentsChange({
+      zoom: nextZoom,
+      rotation: nextRotation,
+      offsetX: clampPhotoOffset(nextOffsetX, nextZoom),
+      offsetY: clampPhotoOffset(nextOffsetY, nextZoom)
+    });
+  }
+
+  function handlePhotoClick(event) {
+    if (suppressClickRef.current) {
+      event.preventDefault();
+      suppressClickRef.current = false;
+      return;
+    }
+
+    inputRef.current?.click();
+  }
+
+  function handlePhotoPointerDown(event) {
+    if (!canAdjust) {
+      return;
+    }
+
+    const frame = event.currentTarget.getBoundingClientRect();
+    dragStateRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX,
+      offsetY,
+      frameSize: Math.max(1, Math.min(frame.width, frame.height)),
+      didDrag: false
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsDraggingPhoto(true);
+  }
+
+  function handlePhotoPointerMove(event) {
+    const dragState = dragStateRef.current;
+
+    if (!dragState) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragState.startX;
+    const deltaY = event.clientY - dragState.startY;
+
+    if (Math.abs(deltaX) > 2 || Math.abs(deltaY) > 2) {
+      dragState.didDrag = true;
+      suppressClickRef.current = true;
+    }
+
+    onAdjustmentsChange({
+      zoom,
+      rotation,
+      offsetX: clampPhotoOffset(dragState.offsetX + (deltaX / dragState.frameSize), zoom),
+      offsetY: clampPhotoOffset(dragState.offsetY + (deltaY / dragState.frameSize), zoom)
+    });
+  }
+
+  function handlePhotoPointerEnd(event) {
+    if (dragStateRef.current && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    dragStateRef.current = null;
+    setIsDraggingPhoto(false);
+  }
 
   return (
     <div className="photo-upload-wrap">
-      <button className="photo-upload" type="button" onClick={() => inputRef.current?.click()}>
+      <button
+        className={`photo-upload ${canAdjust ? "is-adjustable" : ""} ${isDraggingPhoto ? "is-dragging" : ""}`}
+        type="button"
+        onClick={handlePhotoClick}
+        onPointerDown={handlePhotoPointerDown}
+        onPointerMove={handlePhotoPointerMove}
+        onPointerUp={handlePhotoPointerEnd}
+        onPointerCancel={handlePhotoPointerEnd}
+      >
         {photoUrl ? (
-          <img className="photo-upload-preview" src={photoUrl} alt="Current profile" />
+          <img className="photo-upload-preview" src={photoUrl} alt="Current profile" style={previewStyle} />
         ) : (
           <span className="camera-circle"><Icon name="camera" /></span>
         )}
         <strong>{fileName || (photoUrl ? "Change Photo" : "Upload Photo")}</strong>
-        <span>{photoUrl ? "Click to replace" : "JPG, PNG up to 1MB"}</span>
+        <span>{photoUrl ? (canAdjust ? "Drag to adjust" : "Click to replace") : "JPG, PNG, WebP up to 10MB"}</span>
       </button>
       <input
         ref={inputRef}
         className="sr-only"
         type="file"
-        accept="image/png,image/jpeg"
+        accept="image/png,image/jpeg,image/webp"
         onChange={(event) => onFileChange(event.target.files?.[0] || null)}
       />
+      {canAdjust ? (
+        <div className="photo-adjust-panel" aria-label="Photo adjustment controls">
+          <label className="photo-adjust-slider">
+            <span>Zoom <strong>{Math.round(zoom * 100)}%</strong></span>
+            <input
+              type="range"
+              min="1"
+              max="3"
+              step="0.05"
+              value={zoom}
+              onChange={(event) => {
+                const nextZoom = Number(event.target.value);
+                updateAdjustments({
+                  zoom: nextZoom,
+                  offsetX: clampPhotoOffset(offsetX, nextZoom),
+                  offsetY: clampPhotoOffset(offsetY, nextZoom)
+                });
+              }}
+            />
+          </label>
+          <div className="photo-adjust-row">
+            <span>Rotate</span>
+            <button type="button" onClick={() => updateAdjustments({ rotation: rotation - 90 })}>-90</button>
+            <button type="button" onClick={() => updateAdjustments({ rotation: rotation + 90 })}>+90</button>
+            <button type="button" onClick={() => onAdjustmentsChange(DEFAULT_PHOTO_ADJUSTMENTS)}>Reset</button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function PersonalInformation({ personal, photoFile, onPersonalChange, onHelpChange, onPhotoChange }) {
+function PersonalInformation({
+  personal,
+  photoFile,
+  photoAdjustments,
+  onPersonalChange,
+  onHelpChange,
+  onPhotoChange,
+  onPhotoAdjustmentsChange
+}) {
   const [selectedPhotoUrl, setSelectedPhotoUrl] = useState("");
 
   useEffect(() => {
@@ -1322,7 +1633,14 @@ function PersonalInformation({ personal, photoFile, onPersonalChange, onHelpChan
       </div>
 
       <div className="personal-grid">
-        <UploadPhotoBox fileName={photoFile?.name} photoUrl={previewPhotoUrl} onFileChange={onPhotoChange} />
+        <UploadPhotoBox
+          fileName={photoFile?.name}
+          photoUrl={previewPhotoUrl}
+          adjustments={photoAdjustments}
+          canAdjust={Boolean(photoFile)}
+          onFileChange={onPhotoChange}
+          onAdjustmentsChange={onPhotoAdjustmentsChange}
+        />
         <ProfileField
           label="Full Name"
           placeholder="Enter your full name"
@@ -1423,6 +1741,7 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
   });
   const [sectionRows, setSectionRows] = useState(createEmptySectionRows);
   const [photoFile, setPhotoFile] = useState(null);
+  const [photoAdjustments, setPhotoAdjustments] = useState(DEFAULT_PHOTO_ADJUSTMENTS);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
 
@@ -1508,22 +1827,26 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
   function handlePhotoChange(file) {
     if (!file) {
       setPhotoFile(null);
+      setPhotoAdjustments(DEFAULT_PHOTO_ADJUSTMENTS);
       return;
     }
 
     if (!PROFILE_PHOTO_ALLOWED_TYPES.includes(file.type)) {
       setPhotoFile(null);
-      setStatusMessage("Profile photo must be a JPG or PNG image.");
+      setPhotoAdjustments(DEFAULT_PHOTO_ADJUSTMENTS);
+      setStatusMessage("Profile photo must be a JPG, PNG, or WebP image.");
       return;
     }
 
-    if (file.size > PROFILE_PHOTO_MAX_BYTES) {
+    if (file.size > PROFILE_PHOTO_SOURCE_MAX_BYTES) {
       setPhotoFile(null);
-      setStatusMessage("Profile photo must be 1MB or smaller.");
+      setPhotoAdjustments(DEFAULT_PHOTO_ADJUSTMENTS);
+      setStatusMessage("Profile photo must be 10MB or smaller.");
       return;
     }
 
     setStatusMessage("");
+    setPhotoAdjustments(DEFAULT_PHOTO_ADJUSTMENTS);
     setPhotoFile(file);
   }
 
@@ -1537,18 +1860,18 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
     }
 
     if (!PROFILE_PHOTO_ALLOWED_TYPES.includes(photoFile.type)) {
-      throw new Error("Profile photo must be a JPG or PNG image.");
+      throw new Error("Profile photo must be a JPG, PNG, or WebP image.");
     }
 
-    if (photoFile.size > PROFILE_PHOTO_MAX_BYTES) {
-      throw new Error("Profile photo must be 1MB or smaller.");
+    if (photoFile.size > PROFILE_PHOTO_SOURCE_MAX_BYTES) {
+      throw new Error("Profile photo must be 10MB or smaller.");
     }
 
-    const extension = photoFile.name.split(".").pop();
-    const filePath = `${user.id}/profile.${extension}`;
+    const compressedPhoto = await compressProfilePhoto(photoFile, photoAdjustments);
+    const filePath = `${user.id}/${PROFILE_PHOTO_OUTPUT_NAME}`;
     const { error } = await supabase.storage
       .from("profile-photos")
-      .upload(filePath, photoFile, { upsert: true });
+      .upload(filePath, compressedPhoto, { contentType: compressedPhoto.type, upsert: true });
 
     if (error) {
       throw error;
@@ -1621,9 +1944,11 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
         <PersonalInformation
           personal={personal}
           photoFile={photoFile}
+          photoAdjustments={photoAdjustments}
           onPersonalChange={updatePersonal}
           onHelpChange={(value) => updatePersonal("can_help_with", value)}
           onPhotoChange={handlePhotoChange}
+          onPhotoAdjustmentsChange={setPhotoAdjustments}
         />
         {sections.map((section) => (
           <DynamicSection
@@ -1647,9 +1972,16 @@ export default function App() {
   const [view, setView] = useState("directory");
   const [authMessage, setAuthMessage] = useState("");
   const [directoryProfiles, setDirectoryProfiles] = useState([]);
+  const [directoryFilters, setDirectoryFilters] = useState({
+    search: "",
+    batch: "",
+    specialisation: "",
+    canHelpWith: ""
+  });
   const [isDirectoryLoading, setIsDirectoryLoading] = useState(false);
   const [selectedProfile, setSelectedProfile] = useState(null);
-  const visibleProfiles = directoryProfiles;
+  const hasActiveDirectoryFilters = Object.values(directoryFilters).some((value) => value.trim() !== "");
+  const visibleProfiles = directoryProfiles.filter((profile) => profileMatchesFilters(profile, directoryFilters));
 
   useEffect(() => {
     userRef.current = user;
@@ -1698,6 +2030,7 @@ export default function App() {
         setUser(null);
         setSelectedProfile(null);
         setDirectoryProfiles([]);
+        setDirectoryFilters({ search: "", batch: "", specialisation: "", canHelpWith: "" });
         return;
       }
 
@@ -1733,7 +2066,7 @@ export default function App() {
       setIsDirectoryLoading(true);
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, full_name, program, major_specialisation, minor_specialisation, can_help_with, profile_photo_url, linkedin_url")
+        .select(directoryProfileSelect)
         .eq("show_in_directory", true)
         .eq("is_private", false);
 
@@ -1784,8 +2117,13 @@ export default function App() {
     setUser(null);
     setSelectedProfile(null);
     setDirectoryProfiles([]);
+    setDirectoryFilters({ search: "", batch: "", specialisation: "", canHelpWith: "" });
     updateBrowserHistory("directory", { replace: true });
     setView("directory");
+  }
+
+  function handleDirectoryFilterChange(key, value) {
+    setDirectoryFilters((current) => ({ ...current, [key]: value }));
   }
 
   function handleNavigate(nextView) {
@@ -1803,7 +2141,7 @@ export default function App() {
     setView("directory");
     supabase
       .from("profiles")
-      .select("id, full_name, program, major_specialisation, minor_specialisation, can_help_with, profile_photo_url, linkedin_url")
+      .select(directoryProfileSelect)
       .eq("show_in_directory", true)
       .eq("is_private", false)
       .then(({ data }) => setDirectoryProfiles(data || []));
@@ -1850,11 +2188,19 @@ export default function App() {
       />
     ) : (
       <div className="app-shell">
-        <DirectoryHeader user={user} onLogin={handleLogin} onLogout={handleLogout} onNavigate={handleNavigate} />
+        <DirectoryHeader
+          user={user}
+          onLogin={handleLogin}
+          onLogout={handleLogout}
+          onNavigate={handleNavigate}
+          filters={directoryFilters}
+          onFiltersChange={handleDirectoryFilterChange}
+        />
         <DirectoryScreen
           user={user}
-          directoryProfiles={directoryProfiles}
+          directoryProfiles={visibleProfiles}
           isLoading={isDirectoryLoading}
+          hasActiveFilters={hasActiveDirectoryFilters}
           onOpenProfile={handleOpenProfile}
         />
       </div>
@@ -1863,7 +2209,14 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <DirectoryHeader user={user} onLogin={handleLogin} onLogout={handleLogout} onNavigate={handleNavigate} />
+      <DirectoryHeader
+        user={user}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+        onNavigate={handleNavigate}
+        filters={directoryFilters}
+        onFiltersChange={handleDirectoryFilterChange}
+      />
       {authMessage ? <div className="auth-message">{authMessage}</div> : null}
       {selectedProfile ? (
         <DetailedProfileView
@@ -1875,8 +2228,9 @@ export default function App() {
       ) : (
         <DirectoryScreen
           user={user}
-          directoryProfiles={directoryProfiles}
+          directoryProfiles={visibleProfiles}
           isLoading={isDirectoryLoading}
+          hasActiveFilters={hasActiveDirectoryFilters}
           onOpenProfile={handleOpenProfile}
         />
       )}
