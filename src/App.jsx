@@ -7,8 +7,11 @@ const PROFILE_PHOTO_MAX_BYTES = 1 * 1024 * 1024;
 const PROFILE_PHOTO_SOURCE_MAX_BYTES = 10 * 1024 * 1024;
 const PROFILE_PHOTO_MAX_DIMENSION = 1200;
 const PROFILE_PHOTO_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const PROFILE_PHOTO_OUTPUT_TYPE = "image/webp";
-const PROFILE_PHOTO_OUTPUT_NAME = "profile.webp";
+const PROFILE_PHOTO_OUTPUT_TYPE = "image/jpeg";
+const PROFILE_PHOTO_OUTPUT_NAME = "profile.jpg";
+const PRESENT_VALUE = "Present";
+const ADMIN_EMAIL = "aarya.pgdm27g@greatlakes.edu.in";
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DEFAULT_PHOTO_ADJUSTMENTS = { zoom: 1, rotation: 0, offsetX: 0, offsetY: 0 };
 
 function clampPhotoOffset(value, zoom) {
@@ -45,6 +48,17 @@ function loadImageFile(file) {
 
     image.src = objectUrl;
   });
+}
+
+async function fetchImageAsFile(imageUrl) {
+  const response = await fetch(imageUrl);
+
+  if (!response.ok) {
+    throw new Error("Unable to load saved profile photo for editing.");
+  }
+
+  const blob = await response.blob();
+  return new File([blob], "saved-profile-photo", { type: blob.type || PROFILE_PHOTO_OUTPUT_TYPE });
 }
 
 async function compressProfilePhoto(file, adjustments = DEFAULT_PHOTO_ADJUSTMENTS) {
@@ -88,7 +102,7 @@ async function compressProfilePhoto(file, adjustments = DEFAULT_PHOTO_ADJUSTMENT
     for (const quality of qualitySteps) {
       const blob = await canvasToBlob(canvas, PROFILE_PHOTO_OUTPUT_TYPE, quality);
       if (blob.type !== PROFILE_PHOTO_OUTPUT_TYPE) {
-        throw new Error("This browser could not create a WebP profile photo.");
+        throw new Error("This browser could not create a compressed profile photo.");
       }
 
       if (blob.size <= PROFILE_PHOTO_MAX_BYTES) {
@@ -157,8 +171,30 @@ const sections = [
     ]
   },
   {
-    id: "certifications",
+    id: "organisations",
     number: "6",
+    title: "Organisation",
+    icon: "users",
+    fields: [
+      { name: "organisation_name", label: "Organisation Name", placeholder: "Enter organisation name" },
+      { name: "position", label: "Position", placeholder: "Enter your position" },
+      { name: "time_period", label: "Date", type: "period" }
+    ]
+  },
+  {
+    id: "positions_of_responsibility",
+    number: "7",
+    title: "Positions of Responsibility",
+    icon: "users",
+    fields: [
+      { name: "club_committee_name", label: "Club / Committee Name", placeholder: "Enter club or committee name" },
+      { name: "position", label: "Position", placeholder: "Enter your position" },
+      { name: "time_period", label: "Date", type: "period" }
+    ]
+  },
+  {
+    id: "certifications",
+    number: "8",
     title: "Certifications",
     icon: "badge",
     fields: [
@@ -169,7 +205,7 @@ const sections = [
   },
   {
     id: "projects",
-    number: "7",
+    number: "9",
     title: "Projects",
     icon: "folder",
     fields: [
@@ -181,7 +217,7 @@ const sections = [
   },
   {
     id: "publications",
-    number: "8",
+    number: "10",
     title: "Publications",
     icon: "book",
     fields: [
@@ -193,7 +229,7 @@ const sections = [
   },
   {
     id: "case_competitions",
-    number: "9",
+    number: "11",
     title: "Case Competitions",
     icon: "trophy",
     fields: [
@@ -204,7 +240,7 @@ const sections = [
   },
   {
     id: "achievements",
-    number: "10",
+    number: "12",
     title: "Achievements",
     icon: "star",
     fields: [
@@ -372,18 +408,33 @@ function cleanRows(rows) {
         if (key === "time_period" && value && typeof value === "object") {
           return [key, {
             start: isMonthInputValue(value.start) ? value.start : "",
-            end: isMonthInputValue(value.end) ? value.end : ""
+            end: isMonthInputValue(value.end) || isPresentValue(value.end) ? value.end : ""
           }];
         }
 
-        if (key === "year") {
-          return [key, isMonthInputValue(value) || isYearInputValue(value) ? value.trim() : ""];
+        if (key === "year" || key === "date") {
+          return [key, isMonthInputValue(value) || isYearInputValue(value) || isPresentValue(value) ? value.trim() : ""];
         }
 
         return [key, value];
       })
     ))
     .filter((row) => Object.values(row).some((value) => !isBlankValue(value)));
+}
+
+function normalizeLoadedRows(section, rows) {
+  return rows.map((row) => {
+    if (
+      (section.id === "organisations" || section.id === "positions_of_responsibility")
+      && !row.time_period
+      && row.date
+    ) {
+      const { date, ...rest } = row;
+      return { ...rest, time_period: { start: "", end: date } };
+    }
+
+    return row;
+  });
 }
 
 function toTitleCaseName(value) {
@@ -422,6 +473,10 @@ function getExternalUrl(value) {
 
 function isGreatLakesEmail(email) {
   return email?.toLowerCase().endsWith(`@${GREAT_LAKES_DOMAIN}`);
+}
+
+function isAdminUser(user) {
+  return user?.email?.toLowerCase() === ADMIN_EMAIL;
 }
 
 function collectSearchText(value) {
@@ -708,6 +763,17 @@ function DirectoryHeader({
               >
                 My Profile
               </button>
+              {isAdminUser(user) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAccountOpen(false);
+                    onNavigate("admin");
+                  }}
+                >
+                  Open Admin View
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {
@@ -816,9 +882,60 @@ function DirectoryScreen({ user, directoryProfiles, isLoading, hasActiveFilters,
   );
 }
 
+function AdminView({ profiles, isLoading, onEditProfile }) {
+  return (
+    <main className="admin-canvas" aria-label="Admin profile editor">
+      <section className="admin-panel">
+        <div className="admin-panel-header">
+          <div>
+            <p className="admin-kicker">Admin View</p>
+            <h1>Edit Profiles</h1>
+          </div>
+          <p>{profiles.length} profiles</p>
+        </div>
+
+        {isLoading ? (
+          <p className="admin-empty">Loading profiles...</p>
+        ) : profiles.length === 0 ? (
+          <p className="admin-empty">No profiles found.</p>
+        ) : (
+          <div className="admin-profile-list">
+            {profiles.map((profile) => {
+              const displayName = toTitleCaseName(profile.full_name) || profile.email || "Unnamed Profile";
+
+              return (
+                <article className="admin-profile-row" key={profile.id}>
+                  <div className="admin-profile-avatar">
+                    {profile.profile_photo_url ? <img src={profile.profile_photo_url} alt="" /> : null}
+                  </div>
+                  <div>
+                    <h2>{displayName}</h2>
+                    <p>{profile.email || "No email added"}</p>
+                  </div>
+                  <div className="admin-profile-meta">
+                    <span>{profile.program || "No batch"}</span>
+                    <span>{getSpecialisationDisplay(profile)}</span>
+                  </div>
+                  <button type="button" onClick={() => onEditProfile(profile.id)}>
+                    Edit
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
 function formatMonthYear(value) {
   if (!value) {
-    return "Present";
+    return "";
+  }
+
+  if (isPresentValue(value)) {
+    return PRESENT_VALUE;
   }
 
   const date = new Date(value);
@@ -835,7 +952,14 @@ function formatPeriod(period) {
     return "";
   }
 
-  return `${formatMonthYear(period.start)} - ${formatMonthYear(period.end)}`;
+  const start = formatMonthYear(period.start);
+  const end = formatMonthYear(period.end);
+
+  return [start, end].filter(Boolean).join(" - ");
+}
+
+function formatDetailMeta(...items) {
+  return items.filter((item) => !isBlankValue(item)).join(" | ");
 }
 
 function DetailSection({ title, rows, children }) {
@@ -985,7 +1109,7 @@ function DetailedProfileView({ profile, profiles, onSelectProfile, onClose }) {
               key={`${row.degree_course}-${index}`}
               primary={row.college_university}
               secondary={row.degree_course}
-              meta={`${formatPeriod(row.time_period)} | ${row.score}`}
+              meta={formatDetailMeta(formatPeriod(row.time_period), row.score)}
             />
           ))}
         </DetailSection>
@@ -1020,6 +1144,28 @@ function DetailedProfileView({ profile, profiles, onSelectProfile, onClose }) {
               key={`${row.club_committee_name}-${index}`}
               primary={row.club_committee_name}
               secondary={row.position_role}
+            />
+          ))}
+        </DetailSection>
+
+        <DetailSection title="Organisation" rows={profile.organisations}>
+          {(rows) => rows.map((row, index) => (
+            <DetailRow
+              key={`${row.organisation_name}-${index}`}
+              primary={row.organisation_name}
+              secondary={row.position}
+              meta={formatPeriod(row.time_period || { start: "", end: row.date })}
+            />
+          ))}
+        </DetailSection>
+
+        <DetailSection title="Positions of Responsibility" rows={profile.positions_of_responsibility}>
+          {(rows) => rows.map((row, index) => (
+            <DetailRow
+              key={`${row.club_committee_name}-${index}`}
+              primary={row.club_committee_name}
+              secondary={row.position}
+              meta={formatPeriod(row.time_period || { start: "", end: row.date })}
             />
           ))}
         </DetailSection>
@@ -1121,21 +1267,6 @@ function ProfileField({ label, placeholder, icon, type = "text", value, onChange
   );
 }
 
-function openMonthPicker(input) {
-  if (!input) {
-    return;
-  }
-
-  input.focus();
-
-  if (input.showPicker) {
-    input.showPicker();
-    return;
-  }
-
-  input.click();
-}
-
 function isMonthInputValue(value) {
   return typeof value === "string" && /^\d{4}-\d{2}$/.test(value);
 }
@@ -1144,7 +1275,15 @@ function isYearInputValue(value) {
   return typeof value === "string" && /^\d{4}$/.test(value.trim());
 }
 
+function isPresentValue(value) {
+  return value === PRESENT_VALUE;
+}
+
 function formatMonthInput(value) {
+  if (isPresentValue(value)) {
+    return PRESENT_VALUE;
+  }
+
   if (!isMonthInputValue(value)) {
     return "";
   }
@@ -1159,107 +1298,190 @@ function formatMonthInput(value) {
   return date.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
 }
 
+function getCurrentMonthValue() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getInitialPickerYear(value) {
+  if (isMonthInputValue(value)) {
+    return Number(value.slice(0, 4));
+  }
+
+  return new Date().getFullYear();
+}
+
+function buildMonthValue(year, monthIndex) {
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
+}
+
 function YearField({ label, placeholder, value, onChange }) {
+  const isPresent = isPresentValue(value);
+  const displayValue = isPresentValue(value) ? PRESENT_VALUE : "";
+  const canUsePresent = isPresent || Boolean(String(value || "").trim());
+
   return (
     <label className="profile-field">
       <span className="profile-label">{label}</span>
       <span className="input-shell">
         <input
-          value={value}
+          value={isPresent ? "" : value}
           placeholder={placeholder}
           inputMode="numeric"
           maxLength={4}
           pattern="\d{4}"
           onChange={(event) => onChange(event.target.value.replace(/\D/g, "").slice(0, 4))}
         />
+        {displayValue ? <span className="month-display">{displayValue}</span> : null}
+        <button
+          className={`present-button${isPresent ? " is-active" : ""}`}
+          type="button"
+          aria-pressed={isPresent}
+          disabled={!canUsePresent}
+          onClick={() => onChange(PRESENT_VALUE)}
+        >
+          Present
+        </button>
       </span>
     </label>
   );
 }
 
-function MonthField({ label, value, onChange }) {
-  const monthRef = useRef(null);
+function MonthPicker({ label, value, onChange, allowPresent = true }) {
+  const pickerRef = useRef(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(getInitialPickerYear(value));
   const displayValue = formatMonthInput(value);
-  const inputValue = isMonthInputValue(value) ? value : "";
+  const selectedMonth = isMonthInputValue(value) ? Number(value.slice(5, 7)) - 1 : null;
+  const selectedYear = isMonthInputValue(value) ? Number(value.slice(0, 4)) : null;
+  const isPresent = isPresentValue(value);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+
+    setPickerYear(getInitialPickerYear(value));
+
+    function handlePointerDown(event) {
+      if (pickerRef.current && !pickerRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, value]);
+
+  function selectValue(nextValue) {
+    onChange(nextValue);
+    setIsOpen(false);
+  }
+
+  return (
+    <span className="month-picker-control" ref={pickerRef}>
+      <button
+        className={`month-picker-trigger${isOpen ? " is-open" : ""}`}
+        type="button"
+        aria-label={`Choose ${label} month and year`}
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+      >
+        <CalendarIcon />
+        {displayValue ? <span className="month-display">{displayValue}</span> : null}
+      </button>
+      {isOpen ? (
+        <div className="month-picker-popover" role="dialog" aria-label={`${label} calendar`}>
+          <div className="month-picker-year-row">
+            <button type="button" aria-label="Previous year" onClick={() => setPickerYear((year) => year - 1)}>
+              -
+            </button>
+            <span>{pickerYear}</span>
+            <button type="button" aria-label="Next year" onClick={() => setPickerYear((year) => year + 1)}>
+              +
+            </button>
+          </div>
+          <div className="month-picker-grid">
+            {MONTH_LABELS.map((month, index) => {
+              const isSelected = selectedYear === pickerYear && selectedMonth === index;
+
+              return (
+                <button
+                  className={isSelected ? "is-selected" : ""}
+                  type="button"
+                  key={month}
+                  onClick={() => selectValue(buildMonthValue(pickerYear, index))}
+                >
+                  {month}
+                </button>
+              );
+            })}
+          </div>
+          <div className="month-picker-actions">
+            <button type="button" onClick={() => selectValue("")}>
+              Clear
+            </button>
+            <button type="button" onClick={() => selectValue(getCurrentMonthValue())}>
+              This month
+            </button>
+            {allowPresent ? (
+              <button
+                className={isPresent ? "is-active" : ""}
+                type="button"
+                aria-pressed={isPresent}
+                onClick={() => selectValue(PRESENT_VALUE)}
+              >
+                Present
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
+function MonthField({ label, value, onChange }) {
   return (
     <div className="profile-field">
       <span className="profile-label">{label}</span>
       <div className="input-shell month-shell">
-        <input
-          ref={monthRef}
-          className="month-native-input"
-          aria-label={`${label} month and year`}
-          type="month"
-          value={inputValue}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <button
-          className="month-picker-button"
-          type="button"
-          aria-label={`Choose ${label} month and year`}
-          onClick={() => openMonthPicker(monthRef.current)}
-        >
-          <CalendarIcon />
-        </button>
-        {displayValue ? <span className="month-display">{displayValue}</span> : null}
+        <MonthPicker label={label} value={value} onChange={onChange} />
       </div>
     </div>
   );
 }
 
 function TimePeriodField({ label, value, onChange }) {
-  const startMonthRef = useRef(null);
-  const endMonthRef = useRef(null);
   const periodValue = value || { start: "", end: "" };
-  const startInputValue = isMonthInputValue(periodValue.start) ? periodValue.start : "";
-  const endInputValue = isMonthInputValue(periodValue.end) ? periodValue.end : "";
-  const startDisplayValue = formatMonthInput(periodValue.start);
-  const endDisplayValue = formatMonthInput(periodValue.end);
 
   return (
     <div className="profile-field">
       <span className="profile-label">{label}</span>
       <div className="input-shell period-shell">
-        <span className="month-picker-control">
-          <input
-            ref={startMonthRef}
-            className="month-native-input"
-            aria-label={`${label} start month and year`}
-            type="month"
-            value={startInputValue}
-            onChange={(event) => onChange({ ...periodValue, start: event.target.value })}
-          />
-          <button
-            className="month-picker-button"
-            type="button"
-            aria-label={`Choose ${label} start month and year`}
-            onClick={() => openMonthPicker(startMonthRef.current)}
-          >
-            <CalendarIcon />
-          </button>
-          {startDisplayValue ? <span className="month-display">{startDisplayValue}</span> : null}
-        </span>
+        <MonthPicker
+          label={`${label} start`}
+          value={periodValue.start}
+          allowPresent={false}
+          onChange={(nextValue) => onChange({ ...periodValue, start: nextValue })}
+        />
         <span className="period-separator">-</span>
-        <span className="month-picker-control">
-          <input
-            ref={endMonthRef}
-            className="month-native-input"
-            aria-label={`${label} end month and year`}
-            type="month"
-            value={endInputValue}
-            onChange={(event) => onChange({ ...periodValue, end: event.target.value })}
-          />
-          <button
-            className="month-picker-button"
-            type="button"
-            aria-label={`Choose ${label} end month and year`}
-            onClick={() => openMonthPicker(endMonthRef.current)}
-          >
-            <CalendarIcon />
-          </button>
-          {endDisplayValue ? <span className="month-display">{endDisplayValue}</span> : null}
-        </span>
+        <MonthPicker
+          label={`${label} end`}
+          value={periodValue.end}
+          onChange={(nextValue) => onChange({ ...periodValue, end: nextValue })}
+        />
       </div>
     </div>
   );
@@ -1456,7 +1678,17 @@ function HelpMultiSelect({ value, onChange }) {
   );
 }
 
-function UploadPhotoBox({ fileName, photoUrl, onFileChange, adjustments, onAdjustmentsChange, canAdjust }) {
+function UploadPhotoBox({
+  fileName,
+  photoUrl,
+  onFileChange,
+  adjustments,
+  onAdjustmentsChange,
+  canAdjust,
+  hasPhoto,
+  onEditPhoto,
+  onRemovePhoto
+}) {
   const inputRef = useRef(null);
   const dragStateRef = useRef(null);
   const suppressClickRef = useRef(false);
@@ -1490,7 +1722,9 @@ function UploadPhotoBox({ fileName, photoUrl, onFileChange, adjustments, onAdjus
       return;
     }
 
-    inputRef.current?.click();
+    if (!hasPhoto) {
+      inputRef.current?.click();
+    }
   }
 
   function handlePhotoPointerDown(event) {
@@ -1560,15 +1794,25 @@ function UploadPhotoBox({ fileName, photoUrl, onFileChange, adjustments, onAdjus
           <span className="camera-circle"><Icon name="camera" /></span>
         )}
         <strong>{fileName || (photoUrl ? "Change Photo" : "Upload Photo")}</strong>
-        <span>{photoUrl ? (canAdjust ? "Drag to adjust" : "Click to replace") : "JPG, PNG, WebP up to 10MB"}</span>
+        <span>{photoUrl ? (canAdjust ? "Drag to adjust" : "Use actions below") : "JPG, PNG, WebP up to 10MB"}</span>
       </button>
       <input
         ref={inputRef}
         className="sr-only"
         type="file"
         accept="image/png,image/jpeg,image/webp"
-        onChange={(event) => onFileChange(event.target.files?.[0] || null)}
+        onChange={(event) => {
+          onFileChange(event.target.files?.[0] || null);
+          event.target.value = "";
+        }}
       />
+      {hasPhoto ? (
+        <div className="photo-action-row" aria-label="Profile photo actions">
+          <button type="button" onClick={onEditPhoto}>Edit</button>
+          <button type="button" onClick={() => inputRef.current?.click()}>Replace</button>
+          <button type="button" onClick={onRemovePhoto}>Remove Image</button>
+        </div>
+      ) : null}
       {canAdjust ? (
         <div className="photo-adjust-panel" aria-label="Photo adjustment controls">
           <label className="photo-adjust-slider">
@@ -1605,10 +1849,14 @@ function PersonalInformation({
   personal,
   photoFile,
   photoAdjustments,
+  isEditingPhoto,
+  isPhotoRemoved,
   onPersonalChange,
   onHelpChange,
   onPhotoChange,
-  onPhotoAdjustmentsChange
+  onPhotoAdjustmentsChange,
+  onEditPhoto,
+  onRemovePhoto
 }) {
   const [selectedPhotoUrl, setSelectedPhotoUrl] = useState("");
 
@@ -1624,7 +1872,8 @@ function PersonalInformation({
     return () => URL.revokeObjectURL(objectUrl);
   }, [photoFile]);
 
-  const previewPhotoUrl = selectedPhotoUrl || personal.profile_photo_url;
+  const previewPhotoUrl = isPhotoRemoved ? "" : selectedPhotoUrl || personal.profile_photo_url;
+  const hasPhoto = Boolean(previewPhotoUrl);
 
   return (
     <section className="profile-card personal-card" aria-labelledby="personal-title">
@@ -1637,9 +1886,12 @@ function PersonalInformation({
           fileName={photoFile?.name}
           photoUrl={previewPhotoUrl}
           adjustments={photoAdjustments}
-          canAdjust={Boolean(photoFile)}
+          canAdjust={Boolean(photoFile) || isEditingPhoto}
+          hasPhoto={hasPhoto}
           onFileChange={onPhotoChange}
           onAdjustmentsChange={onPhotoAdjustmentsChange}
+          onEditPhoto={onEditPhoto}
+          onRemovePhoto={onRemovePhoto}
         />
         <ProfileField
           label="Full Name"
@@ -1727,7 +1979,9 @@ function ActionBar({ isSaving, statusMessage, onSave }) {
   );
 }
 
-function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
+function ProfileFormPage({ user, targetProfileId = null, onSaved, onLogout, onNavigate }) {
+  const profileId = targetProfileId || user?.id;
+  const isAdminEditing = Boolean(targetProfileId);
   const [personal, setPersonal] = useState({
     full_name: user?.user_metadata?.full_name || "",
     email: user?.email || "",
@@ -1742,11 +1996,13 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
   const [sectionRows, setSectionRows] = useState(createEmptySectionRows);
   const [photoFile, setPhotoFile] = useState(null);
   const [photoAdjustments, setPhotoAdjustments] = useState(DEFAULT_PHOTO_ADJUSTMENTS);
+  const [isEditingPhoto, setIsEditingPhoto] = useState(false);
+  const [isPhotoRemoved, setIsPhotoRemoved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
 
   useEffect(() => {
-    if (!user || USE_TEMP_PROFILE_EDITOR) {
+    if (!user || !profileId || USE_TEMP_PROFILE_EDITOR) {
       return;
     }
 
@@ -1754,7 +2010,7 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
       const { data, error } = await supabase
         .from("profiles")
         .select("*")
-        .eq("id", user.id)
+        .eq("id", profileId)
         .maybeSingle();
 
       if (error) {
@@ -1767,8 +2023,8 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
       }
 
       setPersonal({
-        full_name: data.full_name || user.user_metadata?.full_name || "",
-        email: data.email || user.email || "",
+        full_name: data.full_name || (isAdminEditing ? "" : user.user_metadata?.full_name || ""),
+        email: data.email || (isAdminEditing ? "" : user.email || ""),
         linkedin_url: data.linkedin_url || "",
         contact_number: data.contact_number || "",
         program: data.program || "",
@@ -1782,7 +2038,7 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
         Object.fromEntries(
           sections.map((section) => {
             const rows = Array.isArray(data[section.id]) && data[section.id].length > 0
-              ? data[section.id]
+              ? normalizeLoadedRows(section, data[section.id])
               : [createEmptyRow(section)];
             return [section.id, rows];
           })
@@ -1791,7 +2047,7 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
     }
 
     loadProfile();
-  }, [user]);
+  }, [user, profileId, isAdminEditing]);
 
   function updatePersonal(key, value) {
     setPersonal((current) => ({ ...current, [key]: value }));
@@ -1847,42 +2103,74 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
 
     setStatusMessage("");
     setPhotoAdjustments(DEFAULT_PHOTO_ADJUSTMENTS);
+    setIsEditingPhoto(true);
+    setIsPhotoRemoved(false);
     setPhotoFile(file);
+  }
+
+  function handleEditPhoto() {
+    if (!photoFile && !personal.profile_photo_url) {
+      return;
+    }
+
+    setStatusMessage("");
+    setIsPhotoRemoved(false);
+    setIsEditingPhoto(true);
+  }
+
+  function handleRemovePhoto() {
+    setPhotoFile(null);
+    setPhotoAdjustments(DEFAULT_PHOTO_ADJUSTMENTS);
+    setIsEditingPhoto(false);
+    setIsPhotoRemoved(true);
+    setStatusMessage("");
   }
 
   async function uploadPhotoIfNeeded() {
     if (USE_TEMP_PROFILE_EDITOR) {
+      return isPhotoRemoved ? null : personal.profile_photo_url || null;
+    }
+
+    if (isPhotoRemoved) {
+      await supabase.storage.from("profile-photos").remove([
+        `${profileId}/profile.webp`,
+        `${profileId}/profile.jpg`,
+        `${profileId}/profile.jpeg`,
+        `${profileId}/profile.png`
+      ]);
+      return null;
+    }
+
+    if (!photoFile && !isEditingPhoto) {
       return personal.profile_photo_url || null;
     }
 
-    if (!photoFile) {
-      return personal.profile_photo_url || null;
-    }
+    const photoToUpload = photoFile || await fetchImageAsFile(personal.profile_photo_url);
 
-    if (!PROFILE_PHOTO_ALLOWED_TYPES.includes(photoFile.type)) {
+    if (!PROFILE_PHOTO_ALLOWED_TYPES.includes(photoToUpload.type)) {
       throw new Error("Profile photo must be a JPG, PNG, or WebP image.");
     }
 
-    if (photoFile.size > PROFILE_PHOTO_SOURCE_MAX_BYTES) {
+    if (photoToUpload.size > PROFILE_PHOTO_SOURCE_MAX_BYTES) {
       throw new Error("Profile photo must be 10MB or smaller.");
     }
 
-    const compressedPhoto = await compressProfilePhoto(photoFile, photoAdjustments);
-    const filePath = `${user.id}/${PROFILE_PHOTO_OUTPUT_NAME}`;
+    const compressedPhoto = await compressProfilePhoto(photoToUpload, photoAdjustments);
+    const filePath = `${profileId}/${PROFILE_PHOTO_OUTPUT_NAME}`;
     const { error } = await supabase.storage
       .from("profile-photos")
-      .upload(filePath, compressedPhoto, { contentType: compressedPhoto.type, upsert: true });
+      .upload(filePath, compressedPhoto, { cacheControl: "0", contentType: compressedPhoto.type, upsert: true });
 
     if (error) {
       throw error;
     }
 
     const { data } = supabase.storage.from("profile-photos").getPublicUrl(filePath);
-    return data.publicUrl;
+    return `${data.publicUrl}?v=${Date.now()}`;
   }
 
   async function saveProfile() {
-    if (!user) {
+    if (!user || !profileId) {
       setStatusMessage("Please sign in first.");
       return;
     }
@@ -1900,9 +2188,9 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
       const majorSpecialisation = personal.major_specialisation || null;
       const minorSpecialisation = personal.minor_specialisation || null;
       const payload = {
-        id: user.id,
+        id: profileId,
         full_name: personal.full_name.trim() || null,
-        email: personal.email.trim() || user.email,
+        email: personal.email.trim() || (isAdminEditing ? null : user.email),
         linkedin_url: personal.linkedin_url.trim() || null,
         contact_number: personal.contact_number.trim() || null,
         program: personal.program || null,
@@ -1915,17 +2203,32 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
         ...Object.fromEntries(sections.map((section) => [section.id, cleanRows(sectionRows[section.id])]))
       };
 
-      const { error } = await supabase.from("profiles").upsert(payload);
+      const { error } = isAdminEditing
+        ? await supabase.from("profiles").update(payload).eq("id", profileId)
+        : await supabase.from("profiles").upsert(payload);
 
       if (error) {
         throw error;
       }
 
       setPersonal((current) => ({ ...current, profile_photo_url: profilePhotoUrl || "" }));
+      setPhotoFile(null);
+      setPhotoAdjustments(DEFAULT_PHOTO_ADJUSTMENTS);
+      setIsEditingPhoto(false);
+      setIsPhotoRemoved(false);
       setStatusMessage("Profile saved.");
       onSaved();
     } catch (error) {
-      setStatusMessage(error.message || "Unable to save profile.");
+      if (isAdminEditing && error.message?.toLowerCase().includes("row-level security")) {
+        const isPhotoUpdate = isPhotoRemoved || Boolean(photoFile) || isEditingPhoto;
+        setStatusMessage(
+          isPhotoUpdate
+            ? "Admin photo update is blocked by Supabase Storage RLS. Run the profile-photo storage policies in docs/supabase-schema.sql."
+            : "Admin update is blocked by Supabase RLS. Run the admin policies in docs/supabase-schema.sql."
+        );
+      } else {
+        setStatusMessage(error.message || "Unable to save profile.");
+      }
     } finally {
       setIsSaving(false);
     }
@@ -1940,15 +2243,25 @@ function ProfileFormPage({ user, onSaved, onLogout, onNavigate }) {
         onNavigate={onNavigate}
         showFilters={false}
       />
-      <main className="profile-builder" aria-label="Create profile form">
+      <main className="profile-builder" aria-label={isAdminEditing ? "Edit selected profile form" : "Create profile form"}>
+        {isAdminEditing ? (
+          <div className="admin-edit-banner">
+            <span>Admin editing</span>
+            <strong>{toTitleCaseName(personal.full_name) || personal.email || "Selected profile"}</strong>
+          </div>
+        ) : null}
         <PersonalInformation
           personal={personal}
           photoFile={photoFile}
           photoAdjustments={photoAdjustments}
+          isEditingPhoto={isEditingPhoto}
+          isPhotoRemoved={isPhotoRemoved}
           onPersonalChange={updatePersonal}
           onHelpChange={(value) => updatePersonal("can_help_with", value)}
           onPhotoChange={handlePhotoChange}
           onPhotoAdjustmentsChange={setPhotoAdjustments}
+          onEditPhoto={handleEditPhoto}
+          onRemovePhoto={handleRemovePhoto}
         />
         {sections.map((section) => (
           <DynamicSection
@@ -1979,6 +2292,9 @@ export default function App() {
     canHelpWith: ""
   });
   const [isDirectoryLoading, setIsDirectoryLoading] = useState(false);
+  const [adminProfiles, setAdminProfiles] = useState([]);
+  const [isAdminLoading, setIsAdminLoading] = useState(false);
+  const [adminEditingProfileId, setAdminEditingProfileId] = useState(null);
   const [selectedProfile, setSelectedProfile] = useState(null);
   const hasActiveDirectoryFilters = Object.values(directoryFilters).some((value) => value.trim() !== "");
   const visibleProfiles = directoryProfiles.filter((profile) => profileMatchesFilters(profile, directoryFilters));
@@ -2029,6 +2345,8 @@ export default function App() {
       if (!sessionUser) {
         setUser(null);
         setSelectedProfile(null);
+        setAdminEditingProfileId(null);
+        setAdminProfiles([]);
         setDirectoryProfiles([]);
         setDirectoryFilters({ search: "", batch: "", specialisation: "", canHelpWith: "" });
         return;
@@ -2070,7 +2388,11 @@ export default function App() {
         .eq("show_in_directory", true)
         .eq("is_private", false);
 
-      if (!error) {
+      if (error) {
+        setAuthMessage(error.message);
+        setDirectoryProfiles([]);
+      } else {
+        setAuthMessage("");
         setDirectoryProfiles(data || []);
       }
 
@@ -2079,6 +2401,36 @@ export default function App() {
 
     loadDirectoryProfiles();
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !isAdminUser(user) || view !== "admin") {
+      return;
+    }
+
+    loadAdminProfiles();
+  }, [user, view]);
+
+  async function loadAdminProfiles() {
+    if (!isAdminUser(user)) {
+      return;
+    }
+
+    setIsAdminLoading(true);
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, program, major_specialisation, minor_specialisation, profile_photo_url")
+      .order("full_name", { ascending: true, nullsFirst: false });
+
+    if (error) {
+      setAuthMessage(error.message);
+      setAdminProfiles([]);
+    } else {
+      setAuthMessage("");
+      setAdminProfiles(data || []);
+    }
+
+    setIsAdminLoading(false);
+  }
 
   async function handleLogin() {
     if (USE_TEMP_PROFILE_EDITOR) {
@@ -2116,6 +2468,8 @@ export default function App() {
     await supabase.auth.signOut();
     setUser(null);
     setSelectedProfile(null);
+    setAdminEditingProfileId(null);
+    setAdminProfiles([]);
     setDirectoryProfiles([]);
     setDirectoryFilters({ search: "", batch: "", specialisation: "", canHelpWith: "" });
     updateBrowserHistory("directory", { replace: true });
@@ -2127,8 +2481,16 @@ export default function App() {
   }
 
   function handleNavigate(nextView) {
+    if ((nextView === "admin" || nextView === "admin-profile") && !isAdminUser(user)) {
+      setAuthMessage("Only the admin account can open admin view.");
+      updateBrowserHistory("directory", { replace: true });
+      setView("directory");
+      return;
+    }
+
     if (nextView === "directory") {
       setSelectedProfile(null);
+      setAdminEditingProfileId(null);
     }
 
     updateBrowserHistory(nextView);
@@ -2144,7 +2506,30 @@ export default function App() {
       .select(directoryProfileSelect)
       .eq("show_in_directory", true)
       .eq("is_private", false)
-      .then(({ data }) => setDirectoryProfiles(data || []));
+      .then(({ data, error }) => {
+        if (error) {
+          setAuthMessage(error.message);
+          setDirectoryProfiles([]);
+          return;
+        }
+
+        setAuthMessage("");
+        setDirectoryProfiles(data || []);
+      });
+  }
+
+  function handleAdminEditProfile(profileIdToEdit) {
+    setSelectedProfile(null);
+    setAdminEditingProfileId(profileIdToEdit);
+    handleNavigate("admin-profile");
+  }
+
+  function handleAdminProfileSaved() {
+    setSelectedProfile(null);
+    setAdminEditingProfileId(null);
+    updateBrowserHistory("admin", { replace: true });
+    setView("admin");
+    loadAdminProfiles();
   }
 
   async function handleOpenProfile(profile) {
@@ -2204,6 +2589,34 @@ export default function App() {
           onOpenProfile={handleOpenProfile}
         />
       </div>
+    );
+  }
+
+  if (view === "admin" && isAdminUser(user)) {
+    return (
+      <div className="app-shell">
+        <DirectoryHeader
+          user={user}
+          onLogin={handleLogin}
+          onLogout={handleLogout}
+          onNavigate={handleNavigate}
+          showFilters={false}
+        />
+        {authMessage ? <div className="auth-message">{authMessage}</div> : null}
+        <AdminView profiles={adminProfiles} isLoading={isAdminLoading} onEditProfile={handleAdminEditProfile} />
+      </div>
+    );
+  }
+
+  if (view === "admin-profile" && isAdminUser(user) && adminEditingProfileId) {
+    return (
+      <ProfileFormPage
+        user={user}
+        targetProfileId={adminEditingProfileId}
+        onSaved={handleAdminProfileSaved}
+        onLogout={handleLogout}
+        onNavigate={handleNavigate}
+      />
     );
   }
 

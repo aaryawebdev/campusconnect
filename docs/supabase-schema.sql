@@ -18,6 +18,8 @@ create table if not exists public.profiles (
   work_experience jsonb default '[]'::jsonb,
   internships jsonb default '[]'::jsonb,
   clubs jsonb default '[]'::jsonb,
+  organisations jsonb default '[]'::jsonb,
+  positions_of_responsibility jsonb default '[]'::jsonb,
   certifications jsonb default '[]'::jsonb,
   projects jsonb default '[]'::jsonb,
   publications jsonb default '[]'::jsonb,
@@ -30,18 +32,40 @@ create table if not exists public.profiles (
 
 alter table public.profiles
 add column if not exists major_specialisation text,
-add column if not exists minor_specialisation text;
+add column if not exists minor_specialisation text,
+add column if not exists organisations jsonb default '[]'::jsonb,
+add column if not exists positions_of_responsibility jsonb default '[]'::jsonb;
 
 alter table public.profiles enable row level security;
 
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles to authenticated;
 
+create or replace function public.is_aarya_admin()
+returns boolean
+language sql
+security definer
+set search_path = public, auth
+as $$
+  select
+    lower(coalesce(auth.jwt() ->> 'email', '')) = 'aarya.pgdm27g@greatlakes.edu.in'
+    or exists (
+      select 1
+      from auth.users
+      where auth.users.id = auth.uid()
+        and lower(auth.users.email) = 'aarya.pgdm27g@greatlakes.edu.in'
+    );
+$$;
+
+grant execute on function public.is_aarya_admin() to authenticated;
+
 drop policy if exists "Great Lakes users can view directory profiles" on public.profiles;
 drop policy if exists "Great Lakes users can view own profile" on public.profiles;
 drop policy if exists "Great Lakes users can create own profile" on public.profiles;
 drop policy if exists "Great Lakes users can update own profile" on public.profiles;
 drop policy if exists "Great Lakes users can delete own profile" on public.profiles;
+drop policy if exists "Aarya can view all profiles" on public.profiles;
+drop policy if exists "Aarya can update all profiles" on public.profiles;
 
 create policy "Great Lakes users can view directory profiles"
 on public.profiles
@@ -58,6 +82,13 @@ for select
 using (
   auth.uid() = id
   and auth.jwt() ->> 'email' like '%@greatlakes.edu.in'
+);
+
+create policy "Aarya can view all profiles"
+on public.profiles
+for select
+using (
+  public.is_aarya_admin()
 );
 
 create policy "Great Lakes users can create own profile"
@@ -78,6 +109,16 @@ using (
 with check (
   auth.uid() = id
   and auth.jwt() ->> 'email' like '%@greatlakes.edu.in'
+);
+
+create policy "Aarya can update all profiles"
+on public.profiles
+for update
+using (
+  public.is_aarya_admin()
+)
+with check (
+  public.is_aarya_admin()
 );
 
 create policy "Great Lakes users can delete own profile"
@@ -104,7 +145,7 @@ for each row
 execute function public.set_updated_at();
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('profile-photos', 'profile-photos', true, 1048576, array['image/jpeg', 'image/png', 'image/webp'])
+values ('profile-photos', 'profile-photos', true, 1048576, array['image/jpeg', 'image/png'])
 on conflict (id) do update
 set public = excluded.public,
     file_size_limit = excluded.file_size_limit,
@@ -112,6 +153,10 @@ set public = excluded.public,
 
 drop policy if exists "Great Lakes users can upload own profile photos" on storage.objects;
 drop policy if exists "Great Lakes users can update own profile photos" on storage.objects;
+drop policy if exists "Great Lakes users can delete own profile photos" on storage.objects;
+drop policy if exists "Aarya can upload profile photos" on storage.objects;
+drop policy if exists "Aarya can update profile photos" on storage.objects;
+drop policy if exists "Aarya can delete profile photos" on storage.objects;
 drop policy if exists "Great Lakes users can view profile photos" on storage.objects;
 
 create policy "Great Lakes users can upload own profile photos"
@@ -130,6 +175,43 @@ using (
   bucket_id = 'profile-photos'
   and auth.jwt() ->> 'email' like '%@greatlakes.edu.in'
   and auth.uid()::text = (storage.foldername(name))[1]
+);
+
+create policy "Great Lakes users can delete own profile photos"
+on storage.objects
+for delete
+using (
+  bucket_id = 'profile-photos'
+  and auth.jwt() ->> 'email' like '%@greatlakes.edu.in'
+  and auth.uid()::text = (storage.foldername(name))[1]
+);
+
+create policy "Aarya can upload profile photos"
+on storage.objects
+for insert
+with check (
+  bucket_id = 'profile-photos'
+  and public.is_aarya_admin()
+);
+
+create policy "Aarya can update profile photos"
+on storage.objects
+for update
+using (
+  bucket_id = 'profile-photos'
+  and public.is_aarya_admin()
+)
+with check (
+  bucket_id = 'profile-photos'
+  and public.is_aarya_admin()
+);
+
+create policy "Aarya can delete profile photos"
+on storage.objects
+for delete
+using (
+  bucket_id = 'profile-photos'
+  and public.is_aarya_admin()
 );
 
 create policy "Great Lakes users can view profile photos"
