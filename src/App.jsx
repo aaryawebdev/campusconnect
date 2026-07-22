@@ -254,7 +254,16 @@ const sections = [
 
 const helpOptions = ["Case Competitions", "Interview Prep", "GDPI Prep"];
 const programOptions = ["PGDM 27", "PGDM 28", "PGCM 27"];
-const specialisationOptions = ["Marketing", "Finance", "Operations", "Analytics", "HR", "Strategy"];
+const specialisationOptions = [
+  "Marketing",
+  "Finance",
+  "Operations",
+  "Analytics",
+  "HR",
+  "Strategy",
+  "Consulting",
+  "Product Management"
+];
 const directoryProfileSelect = [
   "id",
   "full_name",
